@@ -31,13 +31,18 @@ function getCookieValue(cookies, name) {
 export async function onRequestPost(context) {  // Contents of context object
     const { request, env, params, waitUntil, next, data } = context;
 
-    // await errorHandling(context);
-    // telemetryData(context);
-
     const url = new URL(request.url);
     const clonedRequest = await request.clone();
 
-    const formdata = await request.formData();
+    await errorHandling(context);
+    telemetryData(context);
+
+    if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == "") {
+        // img_url 未定义或为空的处理逻辑
+        return new Response('Error: Please configure KV database', { status: 500 });
+    } 
+
+    const formdata = await clonedRequest.formData();
     const fileType = formdata.get('file').type;
     const fileName = formdata.get('file').name;
     let fileExt = fileName.split('.').pop(); // 文件扩展名
@@ -50,6 +55,17 @@ export async function onRequestPost(context) {  // Contents of context object
         }
     }
 
+    // 由于TG会把gif后缀的文件转为视频，所以需要修改后缀名绕过限制
+    if (fileExt === 'gif') {
+        const newFileName = fileName.replace(/\.gif$/, '.jpeg');
+        const newFile = new File([formdata.get('file')], newFileName, { type: fileType });
+        formdata.set('file', newFile);
+    } else if (fileExt === 'webp') {
+        const newFileName = fileName.replace(/\.webp$/, '.jpeg');
+        const newFile = new File([formdata.get('file')], newFileName, { type: fileType });
+        formdata.set('file', newFile);
+    }
+
     const fileTypeMap = {
         'image/': {'url': 'sendPhoto', 'type': 'photo'},
         'video/': {'url': 'sendVideo', 'type': 'video'},
@@ -59,9 +75,14 @@ export async function onRequestPost(context) {  // Contents of context object
 
     const defaultType = {'url': 'sendDocument', 'type': 'document'};
 
-    const sendFunction = Object.keys(fileTypeMap).find(key => fileType.startsWith(key)) 
+    let sendFunction = Object.keys(fileTypeMap).find(key => fileType.startsWith(key)) 
         ? fileTypeMap[Object.keys(fileTypeMap).find(key => fileType.startsWith(key))] 
         : defaultType;
+
+    // GIF 特殊处理
+    if (fileType === 'image/gif' || fileType === 'image/webp' || fileExt === 'gif' || fileExt === 'webp') {
+        sendFunction = {'url': 'sendAnimation', 'type': 'animation'};
+    }
 
     // 优先从请求 URL 获取 authCode
     let authCode = url.searchParams.get('authCode');
@@ -99,6 +120,7 @@ export async function onRequestPost(context) {  // Contents of context object
     newFormdata.append('chat_id', env.TG_CHAT_ID);
     newFormdata.append(sendFunction.type, formdata.get('file'));
 
+
     url.searchParams.forEach((value, key) => {
         if (key !== 'authCode') {
             targetUrl.searchParams.append(key, value);
@@ -135,31 +157,26 @@ export async function onRequestPost(context) {  // Contents of context object
         // const id = src.split('/').pop();
         const id = fileInfo.file_id;
         const fullId = id + '.' + fileExt;
-        const img_url = env.img_url;
         const apikey = env.ModerateContentApiKey;
     
-        if (img_url == undefined || img_url == null || img_url == "") {
-            // img_url 未定义或为空的处理逻辑
+        if (apikey == undefined || apikey == null || apikey == "") {
+            await env.img_url.put(fullId, "", {
+                metadata: { FileName: fileName, FileType: fileType, ListType: "None", Label: "None", TimeStamp: time, Channel: "Telegram", TgFilePath: filePath },
+            });
         } else {
-            if (apikey == undefined || apikey == null || apikey == "") {
-                await env.img_url.put(fullId, "", {
-                    metadata: { FileName: fileName, FileType: fileType, ListType: "None", Label: "None", TimeStamp: time, Channel: "Telegram", TgFilePath: filePath },
-                });
-            } else {
-                try {
-                    const fetchResponse = await fetch(`https://api.moderatecontent.com/moderate/?key=${apikey}&url=https://api.telegram.org/file/bot${env.TG_BOT_TOKEN}/${filePath}`);
-                    if (!fetchResponse.ok) {
-                        throw new Error(`HTTP error! status: ${fetchResponse.status}`);
-                    }
-                    const moderate_data = await fetchResponse.json();
-                    await env.img_url.put(fullId, "", {
-                        metadata: { FileName: fileName, FileType: fileType, ListType: "None", Label: moderate_data.rating_label, TimeStamp: time, Channel: "Telegram", TgFilePath: filePath },
-                    });
-                } catch (error) {
-                    console.error('Moderate Error:', error);
-                } finally {
-                    console.log('Moderate Done');
+            try {
+                const fetchResponse = await fetch(`https://api.moderatecontent.com/moderate/?key=${apikey}&url=https://api.telegram.org/file/bot${env.TG_BOT_TOKEN}/${filePath}`);
+                if (!fetchResponse.ok) {
+                    throw new Error(`HTTP error! status: ${fetchResponse.status}`);
                 }
+                const moderate_data = await fetchResponse.json();
+                await env.img_url.put(fullId, "", {
+                    metadata: { FileName: fileName, FileType: fileType, ListType: "None", Label: moderate_data.rating_label, TimeStamp: time, Channel: "Telegram", TgFilePath: filePath },
+                });
+            } catch (error) {
+                console.error('Moderate Error:', error);
+            } finally {
+                console.log('Moderate Done');
             }
         }
     } catch (error) {
