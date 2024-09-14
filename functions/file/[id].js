@@ -9,7 +9,9 @@ export async function onRequest(context) {  // Contents of context object
         next, // used for middleware or to fetch assets
         data, // arbitrary space for passing data between middlewares
     } = context;
-
+    // 解码params.id
+    params.id = decodeURIComponent(params.id);
+    
     const url = new URL(request.url);
     let Referer = request.headers.get('Referer')
     if (Referer) {
@@ -81,8 +83,8 @@ export async function onRequest(context) {  // Contents of context object
         });
 
         if (response.ok) {
-            // Referer header equal to the admin page
-            if (request.headers.get('Referer') == url.origin + "/admin") {
+            // Referer header equal to the dashboard page
+            if (request.headers.get('Referer') == url.origin + "/dashboard") {
                 //show the image
                 return newRes;
             }
